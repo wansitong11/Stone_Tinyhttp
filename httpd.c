@@ -16,6 +16,25 @@ void* accept_request();
 
 int startup(u_short* port)
 {
+    int httpd = 0,option;
+    struct sockaddr_in name;
+    //为httpd分配套接字
+    httpd = socket(PF_INET, SOCK_STREAM, 0);
+    if(httpd == -1){
+        error_die("socket");
+    }
+
+    socklen_t optlen;
+    optlen = sizeof(option);
+    option = 1;
+    setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, (void*)&option, optlen);
+
+    memset(&name, 0, sizeof(name));
+    name.sin_family = AF_INET;
+    name.sin_port = htons(*port);
+    name.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    
     
 }
 
