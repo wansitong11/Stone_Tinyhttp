@@ -16,12 +16,13 @@
 #define SERVER_STRING "Stone's http\r\n"
 
 void* accept_request(void*);
-int get_line(int, char*, int);
+int get_line(int, char*, int); //读取一行请求的内容，内部使用了recv函数
 void implemented(int);
 void not_found(int);
 void serve_file(int, const char*);
 void execute_cgi(int, const char*, const char*, const char*);
 void unimplemented(int);
+void execute_cgi(int, const char*, const char*, const char*);
 
 void* accept_request(void* client_sock)
 {
@@ -117,6 +118,160 @@ void* accept_request(void* client_sock)
     }
     close(client);
     return NULL;
+}
+
+void execute_cgi(int client, const char* filepath, 
+                 const char* method, const char* query_string)
+{
+    char buf[1024];
+    int cgi_output[2];
+    int cgi_input[2];
+    
+    pid_t pid;
+    int status;
+
+    int i;
+    char c;
+
+    int numchars = 1;
+
+    int content_length = -1; //body长度
+
+    buf[0] = 'A';
+    buf[1] = '\0';
+    //如果是GET，则读完并忽略剩下的内容
+    if(strcasecmp(method, "GET") == 0){
+        while(numchars > 0 && strcmp('\n', buf)){
+            numchars = get_line(client, buf, sizeof(buf));
+        }
+    }
+    //POST
+    //查找请求的Content_Length
+    else{
+        numchars = get_line(client, buf, sizeof(buf));
+        //循环查找header中 Content-Length 并保存
+        while(numchars > 0 && strcmp('\n', buf)){
+            buf[15] = '\0';
+            if(strcasecmp(buf, "Content-Length") == 0){
+                content_length = atoi(&(buf[16]));
+            }
+            //找到之后也继续遍历，知道读完head的内容
+            numchars = get_line(client, buf, sizeof(buf));
+        }
+        if(content_length == -1){
+            bad_request(client);
+            return;
+        }
+    }
+
+    sprintf(buf, "HTTP/1.0 200 OK\r\n");
+    send(client, buf, sizeof(buf));
+    //创建两个管道进行进程通信
+    if(pipe(cgi_output) < 0){
+        cannot_execute(client);
+        return;
+    }
+    if(pipe(cgi_input) < 0){
+        cannot_execute(client);
+        return;
+    }
+    //创建子进程
+    if((pid = fork()) < 0){
+        cannot_execute(client);
+        return;
+    }
+    //子进程
+    if(pid == 0){
+        char meth_env[255];
+        char query_env[255];
+        char length_env[255];
+        //将子进程的输出由标准输出重定向到 cgi_ouput 的管道写端上
+        dup2(cgi_output[1], 1);
+        //将子进程的输出由标准输入重定向到 cgi_input 的管道读端上
+        dup2(cgi_input[0], 0);
+
+        close(cgi_output[0]); //关闭子进程cgi_output读通道
+        close(cgi_input[1]);  //关闭子进程cgi_intput写通道
+
+        //构造一个环境变量
+        //并将这个环境变量加进子进程的运行环境中
+        sprintf(meth_env, "REQUEST_METHOD=%s", method);
+        putenv(meth_env);
+
+        //根据http 请求的不同方法，构造并存储不同的环境变量
+        if(strcasecmp(method, "GET") == 0){ /*GET*/
+            sprintf(query_env, "QUERY_STRING=%s", query_string);
+            putenv(query_env);
+        }
+        else{ /*POST*/
+            sprintf(length_env, "CONTENT_LENGTH=%s", content_length);
+            putenv(length_env);
+        }
+        execl(filepath, filepath, NULL);
+        exit(0);
+    }
+    else{
+        
+    }
+
+
+
+
+
+
+
+
+
+
+}
+
+void headers(int client, const char* filepath){
+    char buf[1024];
+
+    (void)filepath;  /* could use filename to determine file type */
+    //发送HTTP头
+    strcpy(buf, "HTTP/1.0 200 OK\r\n");
+    send(client, buf, strlen(buf), 0);
+    strcpy(buf, SERVER_STRING);
+    send(client, buf, strlen(buf), 0);
+    sprintf(buf, "Content-Type: text/html\r\n");
+    send(client, buf, strlen(buf), 0);
+    strcpy(buf, "\r\n");
+    send(client, buf, strlen(buf), 0);
+}
+
+void cat(int client, FILE* resource){
+    char buf[1024];
+    fgets(buf, sizeof(buf), resource);
+    while(!feof(resource)){
+        send(client, buf, sizeof(buf), 0);
+        fgets(buf, sizeof(buf), resource);
+    }
+}
+
+void serve_file(int client, const char* filepath){
+    FILE *resource = NULL;
+    int numchars = 1;
+    char buf[1024];
+    
+    //剩下的请求读完
+    buf[0] = 'A';
+    buf[1] = '\0';
+    while(numchars > 0 && strcmp('\n', buf)){
+        numchars = get_line(client, buf, sizeof(buf));
+    }
+    
+    resource = fopen(filepath, "r");
+    if(resource == NULL){
+        not_found(client);
+    }
+    else{
+        //打开成功后，将这个文件的基本信息封装成 response 的头部(header)并返回
+        headers(client, filepath);
+        //接着把这个文件的内容读出来作为 response 的 body 发送到客户端
+        cat(client, resource);
+    }
+    fclose(resource);
 }
 
 int get_line(int sock, char* buf, int size){
