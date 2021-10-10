@@ -210,19 +210,29 @@ void execute_cgi(int client, const char* filepath,
         execl(filepath, filepath, NULL);
         exit(0);
     }
-    else{
-        
+    else{ /*父进程*/
+        close(cgi_output[1]);
+        close(cgi_input[0]);
+
+        //如果接收到了 POST 请求，就将 body 的内容读出，并写进cgi_input管道让子进程去读
+        if(strcasecmp(method, "POST") == 0){
+            for(i = 0; i < content_length; i++){
+                recv(client, &c, 1, 0);
+                write(cgi_input[1], &c, 1);
+            }
+        }
+
+        //然后从 cgi_output 管道中读子进程的输出，即cgi脚本返回的数据，并发送到客户端去
+        while(read(cgi_output[0], &c, 1) > 0){
+            send(client, &c, 1, 0);
+        }
+
+        close(cgi_output[0]);
+        close(cgi_input[1]);
+
+        //等待子进程退出
+        waitpid(pid, &status, 0);
     }
-
-
-
-
-
-
-
-
-
-
 }
 
 void headers(int client, const char* filepath){
