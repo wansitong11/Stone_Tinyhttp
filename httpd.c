@@ -23,6 +23,8 @@ void serve_file(int, const char*);
 void execute_cgi(int, const char*, const char*, const char*);
 void unimplemented(int);
 void execute_cgi(int, const char*, const char*, const char*);
+void bad_request(int);
+void cannot_execute(int);
 
 void* accept_request(void* client_sock)
 {
@@ -141,7 +143,7 @@ void execute_cgi(int client, const char* filepath,
     buf[1] = '\0';
     //如果是GET，则读完并忽略剩下的内容
     if(strcasecmp(method, "GET") == 0){
-        while(numchars > 0 && strcmp('\n', buf)){
+        while(numchars > 0 && strcmp("\n", buf)){
             numchars = get_line(client, buf, sizeof(buf));
         }
     }
@@ -150,7 +152,7 @@ void execute_cgi(int client, const char* filepath,
     else{
         numchars = get_line(client, buf, sizeof(buf));
         //循环查找header中 Content-Length 并保存
-        while(numchars > 0 && strcmp('\n', buf)){
+        while(numchars > 0 && strcmp("\n", buf)){
             buf[15] = '\0';
             if(strcasecmp(buf, "Content-Length") == 0){
                 content_length = atoi(&(buf[16]));
@@ -165,7 +167,7 @@ void execute_cgi(int client, const char* filepath,
     }
 
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
-    send(client, buf, sizeof(buf));
+    send(client, buf, sizeof(buf), 0);
     //创建两个管道进行进程通信
     if(pipe(cgi_output) < 0){
         cannot_execute(client);
@@ -204,7 +206,7 @@ void execute_cgi(int client, const char* filepath,
             putenv(query_env);
         }
         else{ /*POST*/
-            sprintf(length_env, "CONTENT_LENGTH=%s", content_length);
+            sprintf(length_env, "CONTENT_LENGTH=%d", content_length);
             putenv(length_env);
         }
         execl(filepath, filepath, NULL);
@@ -267,7 +269,7 @@ void serve_file(int client, const char* filepath){
     //剩下的请求读完
     buf[0] = 'A';
     buf[1] = '\0';
-    while(numchars > 0 && strcmp('\n', buf)){
+    while(numchars > 0 && strcmp("\n", buf)){
         numchars = get_line(client, buf, sizeof(buf));
     }
     
@@ -314,6 +316,34 @@ int get_line(int sock, char* buf, int size){
     }
     buf[i] = '\0';
     return i;
+}
+
+void cannot_execute(int client){
+    char buf[1024];
+//发送500
+    sprintf(buf, "HTTP/1.0 500 Internal Server Error\r\n");
+    send(client, buf, strlen(buf), 0);
+    sprintf(buf, "Content-type: text/html\r\n");
+    send(client, buf, strlen(buf), 0);
+    sprintf(buf, "\r\n");
+    send(client, buf, strlen(buf), 0);
+    sprintf(buf, "<P>Error prohibited CGI execution.\r\n");
+    send(client, buf, strlen(buf), 0);
+}
+
+void bad_request(int client){
+    char buf[1024];
+	//发送400
+    sprintf(buf, "HTTP/1.0 400 BAD REQUEST\r\n");
+    send(client, buf, sizeof(buf), 0);
+    sprintf(buf, "Content-type: text/html\r\n");
+    send(client, buf, sizeof(buf), 0);
+    sprintf(buf, "\r\n");
+    send(client, buf, sizeof(buf), 0);
+    sprintf(buf, "<P>Your browser sent a bad request, ");
+    send(client, buf, sizeof(buf), 0);
+    sprintf(buf, "such as a POST without a Content-Length.\r\n");
+    send(client, buf, sizeof(buf), 0);
 }
 
 void not_found(int client){
@@ -408,8 +438,8 @@ int startup(u_short* port)
 
 int main()
 {
-    int server_sock = -1;
-    u_short port = 6379;
+    int server_sock = -1; //服务器套接字，用来接收
+    u_short port = 0;
     int client_sock = -1;
     struct sockaddr_in client_name;
     socklen_t client_name_len = sizeof(client_name);
@@ -420,7 +450,7 @@ int main()
     printf("http running on port %d\n", port);
 
     while(1){
-        
+        //server_sock接收到请求，通过accept再创建一个client_sock用来处理
         client_sock = accept(server_sock, 
                             (struct sockaddr*)&client_name, 
                             &client_name_len);
